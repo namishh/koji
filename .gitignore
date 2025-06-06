@@ -1,0 +1,5 @@
+*
+!.gitignore
+!build.zig*
+!src
+!src/*.zig
