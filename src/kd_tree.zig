@@ -62,10 +62,13 @@ pub const KdTree = struct {
         return node;
     }
 
-    pub fn findNearest(self: *const KdTree, target: rl.Vector2, best_dist: *f32, best_index: *usize) void {
-        const dist = target.distance(self.point);
-        if (dist < best_dist.*) {
-            best_dist.* = dist;
+    pub fn findNearest(self: *const KdTree, target: rl.Vector2, best_dist_sq: *f32, best_index: *usize) void {
+        const dx = target.x - self.point.x;
+        const dy = target.y - self.point.y;
+        const dist_sq = dx * dx + dy * dy;
+
+        if (dist_sq < best_dist_sq.*) {
+            best_dist_sq.* = dist_sq;
             best_index.* = self.color_index;
         }
 
@@ -76,10 +79,13 @@ pub const KdTree = struct {
         const primary = if (target_coord < node_coord) self.left else self.right;
         const secondary = if (target_coord < node_coord) self.right else self.left;
 
-        if (primary) |p| p.findNearest(target, best_dist, best_index);
+        if (primary) |p| {
+            p.findNearest(target, best_dist_sq, best_index);
+        }
 
-        if (secondary != null and @abs(target_coord - node_coord) < best_dist.*) {
-            secondary.?.findNearest(target, best_dist, best_index);
+        const diff = target_coord - node_coord;
+        if (secondary != null and diff * diff < best_dist_sq.*) {
+            secondary.?.findNearest(target, best_dist_sq, best_index);
         }
     }
 

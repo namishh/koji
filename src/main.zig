@@ -7,6 +7,7 @@ const SortContext = @import("kd_tree.zig").SortContext;
 const KdTree = @import("kd_tree.zig").KdTree;
 
 pub fn main() anyerror!void {
+    var timer = std.time.nanoTimestamp();
     const screenWidth = 1280;
     const screenHeight = 720;
     rl.initWindow(screenWidth, screenHeight, "koji");
@@ -24,8 +25,7 @@ pub fn main() anyerror!void {
     });
     const rand = prng.random();
 
-    // const numPoints = 1000000;
-    const numPoints = 1200;
+    const numPoints = 100_000;
     var points = ArrayList(rl.Vector2).init(allocator);
     defer points.deinit();
     var colors = ArrayList(rl.Color).init(allocator);
@@ -72,6 +72,10 @@ pub fn main() anyerror!void {
     }
 
     rl.endTextureMode();
+
+    timer = std.time.nanoTimestamp() - timer;
+    const f_time = @as(f64, @floatFromInt(timer)) / 1000000000.0;
+    std.debug.print("Time taken: {d:.3} seconds\n", .{f_time});
 
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
