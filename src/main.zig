@@ -6,8 +6,11 @@ const ArrayList = std.ArrayList;
 const SortContext = @import("kd_tree.zig").SortContext;
 const KdTree = @import("kd_tree.zig").KdTree;
 
+const TileType = enum { Water, Land };
+
+const Tile = struct { index: usize, tile_type: TileType, color: rl.Color, center: rl.Vector2 };
+
 pub fn main() anyerror!void {
-    var timer = std.time.nanoTimestamp();
     const screenWidth = 1280;
     const screenHeight = 720;
     rl.initWindow(screenWidth, screenHeight, "koji");
@@ -25,30 +28,41 @@ pub fn main() anyerror!void {
     });
     const rand = prng.random();
 
-    const numPoints = 100_000;
-    var points = ArrayList(rl.Vector2).init(allocator);
-    defer points.deinit();
-    var colors = ArrayList(rl.Color).init(allocator);
-    defer colors.deinit();
+    // const numPoints = 1000000;
+    const numPoints = 10000;
+    var tiles = ArrayList(Tile).init(allocator);
+    defer tiles.deinit();
 
     var point_indices = try allocator.alloc(usize, numPoints);
     defer allocator.free(point_indices);
 
     for (0..numPoints) |i| {
-        try points.append(.{
+        const position = rl.Vector2{
             .x = rand.float(f32) * screenWidth,
             .y = rand.float(f32) * screenHeight,
-        });
-        try colors.append(.{
+        };
+        const color = rl.Color{
             .r = rand.int(u8),
             .g = rand.int(u8),
             .b = rand.int(u8),
             .a = 255,
+        };
+        try tiles.append(.{
+            .color = color,
+            .center = position,
+            .tile_type = .Water,
+            .index = i,
         });
         point_indices[i] = i;
     }
 
-    const kdtree = try KdTree.build(allocator, points.items, point_indices, 0);
+    var point_refs = try allocator.alloc(rl.Vector2, tiles.items.len);
+    defer allocator.free(point_refs);
+    for (tiles.items, 0..) |tile, i| {
+        point_refs[i] = tile.center;
+    }
+
+    const kdtree = try KdTree.build(allocator, point_refs, point_indices, 0);
     defer kdtree.?.deinitKdTree(allocator);
 
     const voronoiTexture = try rl.loadRenderTexture(screenWidth, screenHeight);
@@ -67,15 +81,11 @@ pub fn main() anyerror!void {
                 tree.findNearest(pixel, &closestDist, &closestIndex);
             }
 
-            rl.drawPixel(@intFromFloat(pixel.x), @intFromFloat(pixel.y), colors.items[closestIndex]);
+            rl.drawPixel(@intFromFloat(pixel.x), @intFromFloat(pixel.y), tiles.items[closestIndex].color);
         }
     }
 
     rl.endTextureMode();
-
-    timer = std.time.nanoTimestamp() - timer;
-    const f_time = @as(f64, @floatFromInt(timer)) / 1000000000.0;
-    std.debug.print("Time taken: {d:.3} seconds\n", .{f_time});
 
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
