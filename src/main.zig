@@ -28,7 +28,6 @@ pub fn main() anyerror!void {
     });
     const rand = prng.random();
 
-    // const numPoints = 1000000;
     const numPoints = 10000;
     var tiles = ArrayList(Tile).init(allocator);
     defer tiles.deinit();
