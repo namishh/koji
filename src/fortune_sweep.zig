@@ -1,5 +1,5 @@
 // fortune sweep algorithm for computing Voronoi diagrams instead of using kd-trees
-// an alternate way, but not used in the current implementation
+// an alternate way, but not used in the current implementation. will return
 const rl = @import("raylib");
 const std = @import("std");
 
@@ -32,6 +32,7 @@ pub const BeachlineArc = struct {
     right: ?*BeachlineArc,
     site: rl.Vector2,
     edge: ?*VoronoiEdge,
+    is_valid: bool,
     circle_event: ?*Event,
 };
 
@@ -65,6 +66,7 @@ pub const Beachline = struct {
             .right = null,
             .parent = null,
             .site = site,
+            .is_valid = true,
             .edge = null,
             .circle_event = null,
         };
@@ -90,6 +92,7 @@ pub const Beachline = struct {
                 .site = arc.site,
                 .edge = null,
                 .circle_event = null,
+                .is_valid = true,
             };
 
             right_arc.* = BeachlineArc{
@@ -97,6 +100,7 @@ pub const Beachline = struct {
                 .right = arc.right,
                 .parent = arc,
                 .site = arc.site,
+                .is_valid = true,
                 .edge = null,
                 .circle_event = null,
             };
@@ -158,25 +162,30 @@ pub const Beachline = struct {
     }
 
     pub fn remove(self: *Beachline, arc: *BeachlineArc) void {
-        if (arc.circle_event) |event| {
-            self.allocator.destroy(event);
-        }
+        arc.is_valid = false;
 
-        if (arc.left) |left| {
-            left.parent = arc.parent;
-        }
-        if (arc.right) |right| {
-            right.parent = arc.parent;
+        arc.circle_event = null;
+
+        var replacement: ?*BeachlineArc = null;
+        if (arc.left != null and arc.right != null) {
+            replacement = arc.right;
+            while (replacement.?.left != null) {
+                replacement = replacement.?.left;
+            }
+        } else {
+            replacement = if (arc.left) |left| left else arc.right;
         }
 
         if (arc.parent) |parent| {
             if (parent.left == arc) {
-                parent.left = arc.right;
-            } else if (parent.right == arc) {
-                parent.right = arc.left;
+                parent.left = replacement;
+            } else {
+                parent.right = replacement;
             }
+            if (replacement) |r| r.parent = parent;
         } else {
-            self.root = if (arc.right) |right| right else arc.left;
+            self.root = replacement;
+            if (replacement) |r| r.parent = null;
         }
 
         self.allocator.destroy(arc);
@@ -229,6 +238,10 @@ pub const VoronoiGenerator = struct {
     }
 
     pub fn deinit(self: *VoronoiGenerator) void {
+        while (self.event_queue.items.len > 0) {
+            _ = self.event_queue.remove();
+        }
+
         self.beachline.deinit();
         self.event_queue.deinit();
         self.voronoi_edges.deinit();
@@ -276,9 +289,11 @@ pub const VoronoiGenerator = struct {
     pub fn handleCircleEvent(self: *VoronoiGenerator, event: Event) void {
         const arc = event.arc orelse return;
 
-        if (arc.circle_event != &event) return;
+        // Check if arc is still valid
+        if (!arc.is_valid) return;
 
-        arc.circle_event = null;
+        // Mark arc as invalid to prevent reuse
+        arc.is_valid = false;
 
         const left_arc = arc.left;
         const right_arc = arc.right;
@@ -291,19 +306,17 @@ pub const VoronoiGenerator = struct {
             self.voronoi_edges.append(edge) catch {};
         }
 
-        self.beachline.remove(arc);
-
+        // Clear circle events for adjacent arcs BEFORE removing
         if (left_arc) |left| {
-            if (left.circle_event) |ce| {
-                ce.arc = null;
-            }
+            left.circle_event = null;
         }
         if (right_arc) |right| {
-            if (right.circle_event) |ce| {
-                ce.arc = null;
-            }
+            right.circle_event = null;
         }
 
+        self.beachline.remove(arc);
+
+        // Add new circle events for remaining arcs
         if (left_arc != null and right_arc != null) {
             if (left_arc.?.left) |ll| {
                 self.addCircleEvent(ll, left_arc.?, right_arc.?) catch {};
@@ -330,6 +343,7 @@ pub const VoronoiGenerator = struct {
 
         b_arc.circle_event = try self.allocator.create(Event);
         b_arc.circle_event.?.* = circle_event;
+        b_arc.circle_event.?.arc = b_arc;
 
         try self.event_queue.add(circle_event);
     }
