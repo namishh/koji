@@ -67,9 +67,11 @@ const KdTreeExt = struct {
     }
 };
 
-fn findVoronoiEdges(tiles: []Tile, kdtree: *const KdTree, screen_width: i32, screen_height: i32, allocator: std.mem.Allocator) !void {
-    _ = allocator;
+fn computeVoronoiEdgesAndNeighbors(tiles: []Tile, kdtree: *const KdTree, screen_width: i32, screen_height: i32, allocator: std.mem.Allocator) !void {
     const sample_density = 2;
+
+    var processed_pairs = std.AutoHashMap([2]usize, void).init(allocator);
+    defer processed_pairs.deinit();
 
     for (0..@intCast(screen_height)) |y| {
         if (y % sample_density != 0) continue;
@@ -102,65 +104,65 @@ fn findVoronoiEdges(tiles: []Tile, kdtree: *const KdTree, screen_width: i32, scr
                             .y = (pixel.y + neighbor_pixel.y) / 2,
                         };
 
-                        const edge1 = VoronoiEdge{
+                        const edge = VoronoiEdge{
                             .start = edge_point,
                             .end = edge_point,
                             .neighbor_index = neighbor_index,
                         };
+                        try tiles[closest_index].edges.append(edge);
 
-                        try tiles[closest_index].edges.append(edge1);
+                        const pair_key = if (closest_index < neighbor_index)
+                            [2]usize{ closest_index, neighbor_index }
+                        else
+                            [2]usize{ neighbor_index, closest_index };
 
-                        var found = false;
-                        for (tiles[closest_index].neighbors.items) |n| {
-                            if (n == neighbor_index) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            try tiles[closest_index].neighbors.append(neighbor_index);
+                        if (!processed_pairs.contains(pair_key)) {
+                            try processed_pairs.put(pair_key, {});
+
+                            try addNeighborIfNotPresent(&tiles[closest_index], neighbor_index);
+                            try addNeighborIfNotPresent(&tiles[neighbor_index], closest_index);
                         }
                     }
                 }
             }
         }
     }
+
+    try findAdditionalDelaunayNeighbors(tiles, kdtree, allocator);
 }
 
-fn findNeighborsDelaunay(tiles: []Tile, kdtree: *const KdTree, allocator: std.mem.Allocator) !void {
+fn addNeighborIfNotPresent(tile: *Tile, neighbor_index: usize) !void {
+    for (tile.neighbors.items) |n| {
+        if (n == neighbor_index) return;
+    }
+    try tile.neighbors.append(neighbor_index);
+}
+
+fn findAdditionalDelaunayNeighbors(tiles: []Tile, kdtree: *const KdTree, allocator: std.mem.Allocator) !void {
     for (tiles, 0..) |*tile, i| {
-        const k_nearest = try KdTreeExt.findKNearest(kdtree, tile.center, 20, allocator);
+        const k_nearest = try KdTreeExt.findKNearest(kdtree, tile.center, 12, allocator);
         defer allocator.free(k_nearest);
 
         for (k_nearest) |neighbor_idx| {
-            if (neighbor_idx == i) continue; // Skip self
+            if (neighbor_idx == i) continue;
 
             const neighbor = &tiles[neighbor_idx];
 
-            if (try areVoronoiNeighbors(tile.center, neighbor.center, tiles, kdtree)) {
-                var found = false;
-                for (tile.neighbors.items) |n| {
-                    if (n == neighbor_idx) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try tile.neighbors.append(neighbor_idx);
-                }
+            if (try areVoronoiNeighbors(tile.center, neighbor.center, tiles, kdtree, allocator)) {
+                try addNeighborIfNotPresent(tile, neighbor_idx);
             }
         }
     }
 }
 
-fn areVoronoiNeighbors(center1: rl.Vector2, center2: rl.Vector2, tiles: []Tile, kdtree: *const KdTree) !bool {
+fn areVoronoiNeighbors(center1: rl.Vector2, center2: rl.Vector2, tiles: []Tile, kdtree: *const KdTree, allocator: std.mem.Allocator) !bool {
     const midpoint = rl.Vector2{
         .x = (center1.x + center2.x) / 2,
         .y = (center1.y + center2.y) / 2,
     };
 
-    const k_nearest = try KdTreeExt.findKNearest(kdtree, midpoint, 2, std.heap.page_allocator);
-    defer std.heap.page_allocator.free(k_nearest);
+    const k_nearest = try KdTreeExt.findKNearest(kdtree, midpoint, 2, allocator);
+    defer allocator.free(k_nearest);
 
     if (k_nearest.len < 2) return false;
 
@@ -196,7 +198,7 @@ pub fn main() anyerror!void {
 
     var timer = try std.time.Timer.start();
 
-    const numPoints = 1000; // Reduced for edge detection performance
+    const numPoints = 3_000;
     var tiles = ArrayList(Tile).init(allocator);
     defer {
         for (tiles.items) |*tile| {
@@ -238,8 +240,8 @@ pub fn main() anyerror!void {
 
     const kdtree = try KdTree.build(allocator, point_refs, point_indices, 0);
     defer kdtree.?.deinitKdTree(allocator);
-    try findNeighborsDelaunay(tiles.items, kdtree.?, allocator);
-    try findVoronoiEdges(tiles.items, kdtree.?, screenWidth, screenHeight, allocator);
+
+    try computeVoronoiEdgesAndNeighbors(tiles.items, kdtree.?, screenWidth, screenHeight, allocator);
 
     const voronoiTexture = try rl.loadRenderTexture(screenWidth, screenHeight);
     defer rl.unloadRenderTexture(voronoiTexture);
@@ -247,7 +249,6 @@ pub fn main() anyerror!void {
     rl.beginTextureMode(voronoiTexture);
     rl.clearBackground(.white);
 
-    // Draw Voronoi diagram
     for (0..screenHeight) |y| {
         for (0..screenWidth) |x| {
             const pixel = rl.Vector2{ .x = @floatFromInt(x), .y = @floatFromInt(y) };
@@ -271,12 +272,5 @@ pub fn main() anyerror!void {
         defer rl.endDrawing();
         rl.clearBackground(.white);
         rl.drawTextureRec(voronoiTexture.texture, .{ .x = 0, .y = 0, .width = screenWidth, .height = -screenHeight }, .{ .x = 0, .y = 0 }, .white);
-
-        for (tiles.items) |tile| {
-            for (tile.neighbors.items) |neighbor_idx| {
-                const neighbor = tiles.items[neighbor_idx];
-                rl.drawLineV(tile.center, neighbor.center, .red);
-            }
-        }
     }
 }
